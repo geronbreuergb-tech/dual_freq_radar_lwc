@@ -1,0 +1,28 @@
+# Data — never commit (too large)
+data/
+*.nc
+*.h5
+*.hdf5
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+*.egg-info/
+
+# Environment
+.env
+.venv/
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Notebook outputs (optional — keeps notebooks small)
+# Uncomment if your notebooks get huge:
+# *.ipynb
