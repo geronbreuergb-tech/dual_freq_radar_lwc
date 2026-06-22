@@ -1,0 +1,92 @@
+# ==========================================
+# 1. IMPORTS & FUNCTIONS
+# ==========================================
+import xarray as xr
+import glob
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def combine_chirps(ds, var_prefix="ZE"):
+    """
+    Combine the three chirp variables (C1, C2, C3) of an RPG cloud radar
+    into a single continuous profile along the range dimension.
+    """
+    c1 = ds[f"C1{var_prefix}"].rename({f"C1Range": "range"}).assign_coords(range=ds["C1Range"].values)
+    c2 = ds[f"C2{var_prefix}"].rename({f"C2Range": "range"}).assign_coords(range=ds["C2Range"].values)
+    c3 = ds[f"C3{var_prefix}"].rename({f"C3Range": "range"}).assign_coords(range=ds["C3Range"].values)
+    
+    return xr.concat([c1, c2, c3], dim="range")
+
+# ==========================================
+# 2. LOAD & PROCESS W-BAND (94 GHz)
+# ==========================================
+w_base_path = Path("../data/raw/cmtrace/20230928")
+zen_files = sorted(glob.glob(str(w_base_path / "*ZEN.LV1.nc")))
+ds_w = xr.open_mfdataset(zen_files)
+
+# Fix Time
+epoch = pd.Timestamp("2001-01-01 00:00:00")
+ds_w = ds_w.assign_coords(Time=epoch + pd.to_timedelta(ds_w["Time"].values, unit="s"))
+
+# Combine Chirps & Convert to dBZ
+Ze_linear_w = combine_chirps(ds_w, "ZE").where(lambda x: x != -999)
+Ze_w_dBZ = 10 * np.log10(Ze_linear_w)
+Ze_w_dBZ.name = "Ze"
+Ze_w_dBZ.attrs.update({"units": "dBZ", "long_name": "Equivalent reflectivity factor (94 GHz)"})
+
+# ==========================================
+# 3. LOAD & PROCESS KA-BAND (35 GHz)
+# ==========================================
+ka_base_path = Path("../data/raw/cmtrace/20230928_KaBand")
+ka_files = sorted(glob.glob(str(ka_base_path / "*ZEN.LV1.nc")))
+ds_ka = xr.open_mfdataset(ka_files)
+
+# Fix Time
+ds_ka = ds_ka.assign_coords(Time=epoch + pd.to_timedelta(ds_ka["Time"].values, unit="s"))
+
+# Combine Chirps & Convert to dBZ
+Ze_linear_ka = combine_chirps(ds_ka, "ZE").where(lambda x: x != -999)
+Ze_ka_dBZ = 10 * np.log10(Ze_linear_ka)
+Ze_ka_dBZ.name = "Ze"
+Ze_ka_dBZ.attrs.update({"units": "dBZ", "long_name": "Equivalent reflectivity factor (35 GHz)"})
+
+# ==========================================
+# 4. ALIGNMENT & DWR CALCULATION
+# ==========================================
+# Clean up duplicate timestamps before aligning to avoid errors
+Ze_ka_dBZ = Ze_ka_dBZ.drop_duplicates(dim="Time")
+Ze_w_dBZ = Ze_w_dBZ.drop_duplicates(dim="Time")
+
+# Align the two arrays onto the exact same Time and Range grid
+Ze_ka_aligned, Ze_w_aligned = xr.align(Ze_ka_dBZ, Ze_w_dBZ, join="inner")
+
+# Calculate DWR
+DWR = Ze_ka_aligned - Ze_w_aligned
+DWR.name = "DWR"
+DWR.attrs.update({"units": "dB", "long_name": "Dual-Wavelength Ratio"})
+
+# ==========================================
+# 5. VISUALIZATION
+# ==========================================
+fig, axes = plt.subplots(3, 1, figsize=(12, 12), sharex=True, sharey=True)
+
+# Plot W-band
+Ze_w_aligned.plot(x="Time", y="range", cmap="viridis", vmin=-50, vmax=20, ax=axes[0])
+axes[0].set_title("W-band (94 GHz) Reflectivity")
+
+# Plot Ka-band
+Ze_ka_aligned.plot(x="Time", y="range", cmap="viridis", vmin=-50, vmax=20, ax=axes[1])
+axes[1].set_title("Ka-band (35 GHz) Reflectivity")
+
+# Plot DWR
+DWR.plot(x="Time", y="range", cmap="inferno", vmin=-5, vmax=15, ax=axes[2], cbar_kwargs={"label": "DWR [dB]"})
+axes[2].set_title("Dual-Wavelength Ratio (Ka - W)")
+
+for ax in axes:
+    ax.set_ylabel("Range / Height [m]")
+axes[-1].set_xlabel("Time [UTC]")
+
+plt.tight_layout()
+plt.show()
