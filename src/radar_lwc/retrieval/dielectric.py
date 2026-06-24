@@ -48,8 +48,11 @@ def epsilon_water_liebe1989(freq_ghz: float, T_celsius: float) -> complex:
     f_s  = 590.0 - 1500.0 * tm1
 
     # Double-Debye complex permittivity — eq. (7)
-    eps = (eps0 - eps1) / (1.0 + 1 * (freq_ghz / f_p)) \
+    eps = (eps0 - eps1) / (1.0 + 1j * (freq_ghz / f_p)) \
         + (eps1 - eps2) / (1.0 + 1j * (freq_ghz / f_s)) \
         + eps2
+    
 
     return eps   # ε' − j·ε''  (imaginary part is negative)
+
+epsilon_water_liebe1989(94.0, 10.0)

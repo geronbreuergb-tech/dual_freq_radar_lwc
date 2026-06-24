@@ -29,7 +29,10 @@ def kappa_liquid(freq_ghz: float, T_celsius: float) -> float:
     # The correct Clausius-Mossotti form is (ε-1)/(ε+2). Verified against
     # Doviak & Zrnic 1993 eq. 8.55, Hogan et al. 2005.
 
+    
+    
     kappa = 4.343e3 * (6.0 * np.pi / lam_m) * np.imag(-K) / RHO_LIQ
+    
     return kappa   # dB/km per g/m^3
 
 
