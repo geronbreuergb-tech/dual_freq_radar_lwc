@@ -37,3 +37,20 @@ def kappa_liquid(freq_ghz: float, T_celsius: float) -> float:
 
 
 
+def kappa_field(T_field: xr.DataArray, freq_ghz: float) -> xr.DataArray:
+    """
+    Vectorized κ over a (time, range) temperature field.
+    """
+    kappa_np = kappa_liquid(freq_ghz, T_field.values)
+
+    return xr.DataArray(
+        kappa_np,
+        dims=T_field.dims,
+        coords=T_field.coords,
+        name=f"kappa_{freq_ghz:.0f}GHz",
+        attrs={
+            "units": "dB km-1 (g m-3)-1",
+            "long_name": f"Rayleigh attenuation coefficient at {freq_ghz} GHz",
+            "model": "Liebe et al. 1989 double-Debye",
+        },
+    )
