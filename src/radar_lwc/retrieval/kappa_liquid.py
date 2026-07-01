@@ -1,5 +1,6 @@
 import numpy as np
 from radar_lwc.retrieval.dielectric import epsilon_water_liebe1989
+import xarray as xr
 
 C_LIGHT  = 2.998e8   # m/s
 RHO_LIQ  = 1.0e6     # g/m^3 (i.e., 1000 kg/m^3 in g/m^3)
