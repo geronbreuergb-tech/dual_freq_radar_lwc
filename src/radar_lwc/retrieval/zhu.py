@@ -79,7 +79,7 @@ def retrieve_lwc_zhu(
         # For simplicity (v1): treat the union of all cloud gates as one segment.
         # If your data has multi-layer clouds, you'll want to split into
         # contiguous runs and process each separately — see comment below.
-        cloud_idx = np.where(mask_v[t])[0]                        # Makes Array of all the indices where the cloud mask is True (i.e., where there is a cloud) ; [0] is for the first element of the tuple returned by np.where, which is the array of indices
+        cloud_idx = np.where(mask_v[t])[0]                        # Makes Array of all the indices where the cloud mask is True (i.e., where there is a cloud) ; [0] is for the first element of the tuple returned by np.where, which is the array of indices. (There could be other arrays in tuple if not)
         if cloud_idx.size < min_cloud_gates:                       
             continue
         
