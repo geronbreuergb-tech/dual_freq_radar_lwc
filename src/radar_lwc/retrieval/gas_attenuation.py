@@ -51,12 +51,21 @@ def alpha_field(
     AH_field: xr.DataArray,
     freq_ghz: float,
 ) -> xr.DataArray:
+    """
+    Vectorized gaseous attenuation α over a (Time, range) field.
+    """
 
+    # Convert xarray objects to NumPy arrays
+    P_np = P_field.values
+    T_np = T_field.values
+    AH_np = AH_field.values
+
+    # Compute gaseous attenuation
     alpha_np = specific_gas_attenuation(
         freq_ghz,
-        P_field.values,
-        T_field.values,
-        AH_field.values,
+        P_np,
+        T_np,
+        AH_np,
     )
 
     return xr.DataArray(
