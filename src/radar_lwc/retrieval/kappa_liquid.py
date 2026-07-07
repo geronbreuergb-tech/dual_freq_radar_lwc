@@ -5,7 +5,7 @@ import xarray as xr
 C_LIGHT  = 2.998e8   # m/s
 RHO_LIQ  = 1.0e6     # g/m^3 (i.e., 1000 kg/m^3 in g/m^3)
 
-def kappa_liquid(freq_ghz: float, T_celsius: float) -> float:
+def kappa_liquid(freq_ghz: float, T_kelvin: float) -> float:
     """
     One-way liquid water specific attenuation coefficient (dB km^-1 (g m^-3)^-1)
     in the Rayleigh / small-particle regime (Doviak & Zrnic 1993).
@@ -15,13 +15,15 @@ def kappa_liquid(freq_ghz: float, T_celsius: float) -> float:
     Parameters
     ----------
     freq_ghz : float
-    T_celsius : float
+    T_kelvin : float
 
     Returns
     -------
     float
         κ in dB·km⁻¹·(g·m⁻³)⁻¹
     """
+    T_celsius = T_kelvin - 273.15
+    
     eps   = epsilon_water_liebe1989(freq_ghz, T_celsius)
     lam_m = C_LIGHT / (freq_ghz * 1e9)            # wavelength in m
     K     = (eps - 1.0) / (eps + 2.0)            # dielectric factor (note +2, not +1!)
