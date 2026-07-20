@@ -38,14 +38,14 @@ def retrieve_lwc_dq(
     alpha_ka:   xr.DataArray,   # (Time, range)
     common_mask: xr.DataArray,  # (Time, range) bool, True = liquid cloud
     min_cloud_gates: int = 4,   # skip profiles thinner than this
-    fit_degree: int = 3,        # polynomial degree for DQ(h) fit (2 or 3)
+    fit_degree: int = 2,        # polynomial degree for DQ(h) fit (2 or 3)
     kappa_mode: str = "tmean",  # "tmean" or "resolved"
 ):
     """Return (lwc, dq) DataArrays. LWC [g m-3]; DQ [g m-3 km], LWP=DQ_top*1000."""
-    h_km = dwr["range"].values.astype(float) / 1000.0
+    h_km = dwr["range"].values.astype(float) / 1000.0             #COnvert Height to km because kappa has units dB/km/(g/m^3)
     D    = dwr.values
-    Kw, Kka = kappa_w.values, kappa_ka.values
-    Aw, Aka = alpha_w.values, alpha_ka.values
+    Kw, Kka = kappa_w.values, kappa_ka.values                # Kappa Values
+    Aw, Aka = alpha_w.values, alpha_ka.values                # Alpha Values
     M = common_mask.values.astype(bool)
     nt, nr = D.shape
 
@@ -53,36 +53,38 @@ def retrieve_lwc_dq(
     dq  = np.full((nt, nr), np.nan)
 
     for t in range(nt):
-        idx = np.flatnonzero(M[t])
-        if idx.size < min_cloud_gates:
+        idx = np.flatnonzero(M[t])               # Like Zhu, Index only where mask is true
+        if idx.size < min_cloud_gates:            # At least 4 gates of cloud required to do a fit
             continue
-        i0, i1 = idx.min(), idx.max()
-        sl = slice(i0, i1 + 1)
+        i0, i1 = idx.min(), idx.max()             # Min and Max index of cloud gates
+        sl = slice(i0, i1 + 1)                      # Slice for cloud gates
 
-        h  = h_km[sl]
-        Dw = D[t, sl]
+        h  = h_km[sl]                    # Heights in km for this cloud profile
+        Dw = D[t, sl]                    # DWR values for this cloud profile
         if not np.isfinite(Dw).all():
             continue                      # keep v1 simple: require a clean run
         dk = Kw[t, sl] - Kka[t, sl]       # Delta_kappa per gate
         da = Aw[t, sl] - Aka[t, sl]       # Delta_alpha per gate
 
         # 1. anchor DWR to cloud base (removes any constant inter-radar offset)
-        D_anch = Dw - Dw[0]
+        D_anch = Dw - Dw[0]     
 
         # 2. cumulative gas term (dB), trapezoid from cloud base, dh in km
         dh = np.diff(h, prepend=h[0])
-        cum_gas = 2.0 * np.cumsum(da * dh)
+        cum_gas = 2.0 * np.cumsum(da * dh)            # integral of 2 * Delta_alpha d_rho
 
         # 3. liquid DWR
-        G = D_anch - cum_gas
+        G = D_anch - cum_gas               # G is step in between that first derives G, which allows for the retrieval of LWC via the integral form of the DWR equation. But also have other derivation with kappa:mean
+                                            #--> Afterwards now integral[q_l * 2 * Delta_kappa] d_rho = G(r) = DWR_anchored(r) - 2 * integral[alpha_W - alpha_Ka] d_rho
+                                            # Now I decide if I wanna use mean kappa and just divide by this and then to get LWC just differentiate DQ, or if I wanna use height-resolved kappa and then differentiate G and divide by 2 * Delta_kappa(h) to get LWC(h)
 
         deg = min(fit_degree, len(h) - 1)
         if deg < 1:
             continue
 
         if kappa_mode == "tmean":
-            DQ_raw = G / (2.0 * np.mean(dk))          # scalar Delta_kappa
-            coef = np.polyfit(h, DQ_raw, deg)         # fit smooth DQ(h)
+            DQ_raw = G / (2.0 * np.mean(dk))          # scalar Delta_kappa with T_Mean. I have Christine´s idea of using the mean kappa over the cloud profile, and then just divide G by this mean kappa to get DQ_raw, which is the cumulative liquid water content.
+            coef = np.polyfit(h, DQ_raw, deg)         # fit smooth DQ(h). So whole LWC profile is fitted with a polynomial, and then I can differentiate this polynomial to get the LWC profile.
             dDQ_dh = np.polyval(np.polyder(coef), h)  # analytic derivative
             lwc_prof = dDQ_dh                         # g m-3
             dq_prof  = np.polyval(coef, h)            # smoothed DQ
