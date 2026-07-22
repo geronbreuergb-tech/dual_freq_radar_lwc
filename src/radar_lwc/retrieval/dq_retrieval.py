@@ -28,7 +28,7 @@ it roughly halves the RMSE vs a raw local derivative on the same data.
 """
 import numpy as np
 import xarray as xr
-
+from scipy.ndimage import label as _label
 
 def retrieve_lwc_dq(
     dwr:        xr.DataArray,   # (Time, range) [dB], Hogan convention Ze_Ka - Ze_W
@@ -37,7 +37,7 @@ def retrieve_lwc_dq(
     alpha_w:    xr.DataArray,   # (Time, range) [dB km-1]
     alpha_ka:   xr.DataArray,   # (Time, range)
     common_mask: xr.DataArray,  # (Time, range) bool, True = liquid cloud
-    min_cloud_gates: int = 4,   # skip profiles thinner than this
+    min_cloud_gates: int = 6,   # skip profiles thinner than this
     fit_degree: int = 2,        # polynomial degree for DQ(h) fit (2 or 3)
     kappa_mode: str = "tmean",  # "tmean" or "resolved"
 ):
@@ -53,52 +53,56 @@ def retrieve_lwc_dq(
     dq  = np.full((nt, nr), np.nan)
 
     for t in range(nt):
-        idx = np.flatnonzero(M[t])               # Like Zhu, Index only where mask is true
-        if idx.size < min_cloud_gates:            # At least 4 gates of cloud required to do a fit
+        lbl, nseg = _label(M[t])    #label() scans the boolean profile and assigns an integer to each connected cloud. So Cloud is 001110022222000333333 . 1, 2, 3 are the labels of the clouds, and 0 is the background. nseg is the number of clouds in this profile.
+        if nseg == 0:
             continue
-        i0, i1 = idx.min(), idx.max()             # Min and Max index of cloud gates
-        sl = slice(i0, i1 + 1)                      # Slice for cloud gates
+        for s in range(1, nseg + 1):     # Loops over number over segments
+            seg = np.flatnonzero(lbl == s)     # Finds Indices only belonging to that cloud. With cloud example above                     ^                it would be s=1 --> seg = [3, 4, 5]  and s=3 would be --> seg = [16, 17, 18, 19, 20, 21]
+            if seg.size < min_cloud_gates:
+                continue
+            i0, i1 = seg.min(), seg.max()
+            sl = slice(i0, i1 + 1)                      # Slice for cloud gates
 
-        h  = h_km[sl]                    # Heights in km for this cloud profile
-        Dw = D[t, sl]                    # DWR values for this cloud profile
-        if not np.isfinite(Dw).all():
-            continue                      # keep v1 simple: require a clean run
-        dk = Kw[t, sl] - Kka[t, sl]       # Delta_kappa per gate
-        da = Aw[t, sl] - Aka[t, sl]       # Delta_alpha per gate
+            h  = h_km[sl]                    # Heights in km for this cloud profile
+            Dw = D[t, sl]                    # DWR values for this cloud profile
+            if not np.isfinite(Dw).all():
+                continue                      # keep v1 simple: require a clean run
+            dk = Kw[t, sl] - Kka[t, sl]       # Delta_kappa per gate
+            da = Aw[t, sl] - Aka[t, sl]       # Delta_alpha per gate
 
-        # 1. anchor DWR to cloud base (removes any constant inter-radar offset)
-        D_anch = Dw - Dw[0]     
+            # 1. anchor DWR to cloud base (removes any constant inter-radar offset)
+            D_anch = Dw - Dw[0]     
 
-        # 2. cumulative gas term (dB), trapezoid from cloud base, dh in km
-        dh = np.diff(h, prepend=h[0])
-        cum_gas = 2.0 * np.cumsum(da * dh)            # integral of 2 * Delta_alpha d_rho
+            # 2. cumulative gas term (dB), trapezoid from cloud base, dh in km
+            dh = np.diff(h, prepend=h[0])
+            cum_gas = 2.0 * np.cumsum(da * dh)            # integral of 2 * Delta_alpha d_rho
 
-        # 3. liquid DWR
-        G = D_anch - cum_gas               # G is step in between that first derives G, which allows for the retrieval of LWC via the integral form of the DWR equation. But also have other derivation with kappa:mean
+            # 3. liquid DWR
+            G = D_anch - cum_gas               # G is step in between that first derives G, which allows for the retrieval of LWC via the integral form of the DWR equation. But also have other derivation with kappa:mean
                                             #--> Afterwards now integral[q_l * 2 * Delta_kappa] d_rho = G(r) = DWR_anchored(r) - 2 * integral[alpha_W - alpha_Ka] d_rho
                                             # Now I decide if I wanna use mean kappa and just divide by this and then to get LWC just differentiate DQ, or if I wanna use height-resolved kappa and then differentiate G and divide by 2 * Delta_kappa(h) to get LWC(h)
 
-        deg = min(fit_degree, len(h) - 1)
-        if deg < 1:
-            continue
+            deg = min(fit_degree, max(1, len(h) - 3))  ## need >= deg+3 points to actually smooth
+            if len(h) < deg + 3:
+                continue
 
-        if kappa_mode == "tmean":
-            DQ_raw = G / (2.0 * np.mean(dk))          # scalar Delta_kappa with T_Mean. I have Christine´s idea of using the mean kappa over the cloud profile, and then just divide G by this mean kappa to get DQ_raw, which is the cumulative liquid water content.
-            coef = np.polyfit(h, DQ_raw, deg)         # fit smooth DQ(h). So whole LWC profile is fitted with a polynomial, and then I can differentiate this polynomial to get the LWC profile.
-            dDQ_dh = np.polyval(np.polyder(coef), h)  # analytic derivative
-            lwc_prof = dDQ_dh                         # g m-3
-            dq_prof  = np.polyval(coef, h)            # smoothed DQ
-        elif kappa_mode == "resolved":
-            coef = np.polyfit(h, G, deg)              # fit smooth G(h)
-            dG_dh = np.polyval(np.polyder(coef), h)
-            lwc_prof = dG_dh / (2.0 * dk)             # pointwise, height-resolved
-            dq_prof  = np.cumsum(lwc_prof * dh)       # integrate back for DQ/LWP
-        else:
-            raise ValueError("kappa_mode must be 'tmean' or 'resolved'")
+            if kappa_mode == "tmean":
+                DQ_raw = G / (2.0 * np.mean(dk))          # scalar Delta_kappa with T_Mean. I have Christine´s idea of using the mean kappa over the cloud profile, and then just divide G by this mean kappa to get DQ_raw, which is the cumulative liquid water content.
+                coef = np.polyfit(h, DQ_raw, deg)         # fit smooth DQ(h). So whole LWC profile is fitted with a polynomial, and then I can differentiate this polynomial to get the LWC profile.
+                dDQ_dh = np.polyval(np.polyder(coef), h)  # analytic derivative
+                lwc_prof = dDQ_dh                         # g m-3
+                dq_prof  = np.polyval(coef, h)            # smoothed DQ
+            elif kappa_mode == "resolved":
+                coef = np.polyfit(h, G, deg)              # fit smooth G(h)
+                dG_dh = np.polyval(np.polyder(coef), h)
+                lwc_prof = dG_dh / (2.0 * dk)             # pointwise, height-resolved
+                dq_prof  = np.cumsum(lwc_prof * dh)       # integrate back for DQ/LWP
+            else:
+                raise ValueError("kappa_mode must be 'tmean' or 'resolved'")
 
-        oi = np.arange(i0, i1 + 1)
-        lwc[t, oi] = lwc_prof
-        dq[t, oi]  = dq_prof
+            oi = np.arange(i0, i1 + 1)
+            lwc[t, oi] = lwc_prof
+            dq[t, oi]  = dq_prof
 
     lwc_da = xr.DataArray(
         lwc, coords=dwr.coords, dims=dwr.dims, name="LWC",
