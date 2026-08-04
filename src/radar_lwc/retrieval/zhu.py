@@ -7,9 +7,83 @@ Zhu, Z., Kollias, P., & Yang, F. (2019).
 'The vertical structure of liquid water content in shallow clouds as
 retrieved from dual-wavelength radar observations.'
 JGR Atmospheres, 124, 14184–14197.
+
+
+This version additionally returns, for every gate, the EFFECTIVE SAMPLE SIZE
+M_eff (Zhu Eq. 8), computed from the empirical autocorrelation of the
+individual sliding-window LWC estimates that contribute to that gate. This is
+what Eq. (7) needs to turn the single-window uncertainty into the final
+averaged uncertainty:
+ 
+    sigma_final(gate) = sigma_single(gate) / sqrt(M_eff(gate))
+
 """
 import numpy as np
 import xarray as xr
+
+
+def _autocorrelation(estimates, max_lag):
+    """
+    Sample autocorrelation at lags 1..max_lag.
+ 
+    estimates : 1-D array of the M sliding-window LWC estimates at ONE gate,
+                ordered by the window that produced them.
+    max_lag   : largest lag to evaluate (must be <= M-2 so each corrcoef sees
+                at least two points).
+    """
+    correlations = []
+    for lag in range(1, max_lag + 1):    # I go through all the lags
+        shifted_later = estimates[lag:]     #
+        shifted_early = estimates[:-lag]    
+        # np.corrcoef returns a 2x2 matrix [[1, r], [r, 1]]; [0][1] is r.
+        r = np.corrcoef(shifted_later, shifted_early)[0][1]    # For lag=1 (If lwc in one window is large, is the lwc of the window one shift later still large?) I compare the lag array withput the last entry and the lag array without the first entry. The difference between the two arrays at each point is that of two following points in the lag. For these arrays I look at the correlation. 
+        # Afterwards I do the same for lag=2 (If lwc in one window is large, is the lwc of the window two shifts later still large?) which takes away the last two entries of the lag array and the first two entries of the lag array. Thats how I see the correlation between estimate 1 and estimate 3 and estimate 4 and 2.
+        # I do this for every lag to see the correlation between window 1 and 2, between 1,3 between 1,4 ... In the end I sum this up then for M_eff
+        correlations.append(r)
+    return np.array(correlations)
+ 
+ 
+def effective_sample_size(estimates, min_estimates_for_autocorr=4):
+    """
+    Zhu Eq. (8): M_eff = M / (1 + 2 * sum_k rho(k)).
+ 
+    estimates : list/array of the M window LWC estimates at one gate.
+ 
+    Returns M_eff, clipped to [1, M]:
+      - cannot be less than 1 (that would mean averaging INCREASES error)
+      - cannot exceed M   (that would mean more independent samples than we have)
+ 
+    If there are too few estimates to measure rho(k) reliably, we fall back to
+    M_eff = M (i.e. treat them as independent). With very few overlapping
+    windows this makes little difference, and it avoids trusting a correlation
+    estimated from 2-3 points.
+    """
+    estimates = np.asarray(estimates, dtype=float)
+    estimates = estimates[np.isfinite(estimates)]
+    n_estimates = len(estimates)
+ 
+    if n_estimates < 2:
+        return float(max(n_estimates, 1))
+    if n_estimates < min_estimates_for_autocorr:
+        return float(n_estimates)          # too few for a stable rho(k)
+    if np.std(estimates) == 0:
+        return float(n_estimates)          # all identical -> corrcoef undefined
+ 
+    # Use lags up to M-2 so the shortest slice still has >= 2 points.    
+    max_lag = n_estimates - 2     # Correlation measures whether two variables vary together. With only one observation there is no variance. NumPy therefore returns NaN so I have to stop at lag 7 for M/N=9
+    rho = _autocorrelation(estimates, max_lag)
+    rho = rho[np.isfinite(rho)]            # drop any NaN lags defensively
+ 
+    denominator = 1.0 + 2.0 * np.sum(rho)
+    m_eff = n_estimates / denominator
+    return float(np.clip(m_eff, 1.0, n_estimates))
+
+
+
+
+
+
+
 
 
 def retrieve_lwc_zhu(
@@ -68,9 +142,16 @@ def retrieve_lwc_zhu(
     lwc_sum = np.zeros((n_t, n_r), dtype=float)
     lwc_cnt = np.zeros((n_t, n_r), dtype=int)
     
-
+    
     derivative_sum = np.zeros((n_t, n_r), dtype=float)
     derivative_count = np.zeros((n_t, n_r), dtype=int)
+    
+
+    # NEW: keep every individual window estimate for each gate, so we can
+    # measure their autocorrelation afterwards. A dict keyed by (t, gate) is
+    # memory-light because only cloudy gates get entries.
+    
+    window_estimates = {}   # {(t, gate_index): [estimate_from_window_1, ...]}
 
 
     # ── Outer loop: time step by time step ───────────────────────────────────
@@ -132,6 +213,10 @@ def retrieve_lwc_zhu(
 
             derivative_sum[t, idx[valid]] += dDWR_dh
             derivative_count[t, idx[valid]] += 1
+
+            # NEW: store each valid per-gate estimate under its gate key.
+            for gate_index, estimate_value in zip(idx[valid], lwc_win[valid]):
+                window_estimates.setdefault((t, gate_index), []).append(estimate_value)     #adds the lwc_win value to the list of estimates for that gate in the window_estimates dictionary. If the key (t, gate_index) does not exist yet, it creates a new list for that key and appends the estimate value to it.
     
     # ── Average across all windows that contributed ──────────────────────────
     with np.errstate(invalid="ignore", divide="ignore"):          # If division is invalid just ignore it and return NaN for that gate. 
@@ -141,21 +226,16 @@ def retrieve_lwc_zhu(
         derivative = np.where(derivative_count > 0, derivative_sum / derivative_count, np.nan)
 
 
-    # # ── Wrap into xarray ─────────────────────────────────────────────────────
-    # return xr.DataArray(
-    #     lwc,
-    #     dims=dwr.dims,
-    #     coords=dwr.coords,
-    #     name="LWC",
-    #     attrs={
-    #         "units": "g m-3",
-    #         "long_name": "Liquid Water Content (Zhu et al. 2019 retrieval)",
-    #         "method": "Sliding-window quadratic DWR gradient",
-    #         "window_size_default_gates": N_default,
-    #         "min_cloud_gates": min_cloud_gates,
-    #     }, 
-    # ), derivative
+    # -- NEW: per-gate effective sample size and window count ---------------
+    m_eff = np.full((n_t, n_r), np.nan, dtype=float)    # Full array of NaN values with shape (n_t, n_r) to store the effective sample size for each gate. This will be filled in later with the computed values.
+    n_windows = np.zeros((n_t, n_r), dtype=float)  # Full array of zeros with shape (n_t, n_r) to store the number of sliding windows that contributed to each gate. This will be filled in later with the computed values.
+ 
+    for (t, gate_index), estimates in window_estimates.items():
+        n_windows[t, gate_index] = len(estimates)     # Puts the estimates for each gate
+        m_eff[t, gate_index] = effective_sample_size(estimates)   # Calculates the effective sample size for each gate
 
+
+    # # ── Wrap into xarray ─────────────────────────────────────────────────────
 
     lwc_da = xr.DataArray(
         lwc,
@@ -182,4 +262,21 @@ def retrieve_lwc_zhu(
         },
     )
 
-    return lwc_da, derivative_da
+    m_eff_da = xr.DataArray(
+        m_eff, dims=dwr.dims, coords=dwr.coords, name="M_eff",
+        attrs={
+            "long_name": "Effective sample size per gate (Zhu et al. 2019 Eq. 8)",
+            "note": "empirical autocorrelation of the per-window LWC estimates; "
+                    "clipped to [1, M]. Divide sigma_single by sqrt(M_eff) for "
+                    "the final averaged uncertainty (Eq. 7).",
+        },
+    )
+ 
+    n_windows_da = xr.DataArray(
+        n_windows, dims=dwr.dims, coords=dwr.coords, name="n_windows",
+        attrs={"long_name": "Number of sliding windows contributing to each gate (M)"},
+    )
+
+
+
+    return lwc_da, derivative_da, m_eff_da, n_windows_da
