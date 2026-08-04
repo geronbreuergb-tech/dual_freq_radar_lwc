@@ -95,6 +95,9 @@ def retrieve_lwc_zhu(
     cloud_mask: xr.DataArray,       # (time, range)  bool — True = liquid cloud
     N_default:  int = 9,            # window size (gates)
     min_cloud_gates: int = 3,       # skip profiles with fewer than this
+    max_ddwr_dh=50.0,      # dB/km — physical ceiling on |dDWR/dh|
+    max_window_std=3.0,    # dB    — reject noisy windows
+    edge_pad=1,            # skip edge gates near cloud base/top
 ) -> xr.DataArray:
     """
     Retrieve LWC(time, range) via sliding-window polynomial DWR gradient.
@@ -166,6 +169,11 @@ def retrieve_lwc_zhu(
         
         i_base = cloud_idx.min()        # cloud-base gate index
         i_top  = cloud_idx.max()        # cloud-top gate index
+
+        i_base += edge_pad
+        i_top  -= edge_pad #remove edges 
+
+
         thickness = i_top - i_base + 1
         
         # ── Adapt window size for thin clouds ────────────────────────────────
@@ -186,13 +194,17 @@ def retrieve_lwc_zhu(
                 continue
             if np.any(~np.isfinite(dwr_win)):                  # If one of the values in the dwr_win is not finite, skip this window; ~ is used to invert the boolean array returned by np.isfinite, so that it returns True for non-finite values and False for finite values. np.any then checks if any of the values in the inverted array are True, which means that there is at least one non-finite value in dwr_win.
                 continue
-            
+            if dwr_win.std() > max_window_std:    # guarded retrieval: if the standard deviation of the DWR values in the window exceeds the maximum allowed value, skip this window. This is a noise filter to avoid fitting a polynomial to a very noisy set of DWR values, which could lead to unphysical results.
+                continue
+
             # ── Fit quadratic & take analytical derivative ───────────────────
             #   DWR(h) ≈ a·h² + b·h + c   →   dDWR/dh = 2a·h + b
             a, b, _ = np.polyfit(h_win, dwr_win, 2)            # h_win and dwr_win are the x and y values for the polynomial fit, respectively. The 2 indicates that we want to fit a polynomial of degree 2 (i.e., a quadratic). np.polyfit returns the coefficients of the polynomial in descending order, so a is the coefficient of h², b is the coefficient of h, and _ is the constant term (which we don't need for the derivative).
             dDWR_dh_per_m = 2.0 * a * h_win + b      # dB / m
             dDWR_dh       = dDWR_dh_per_m * 1000.0   # → dB / km   ★ unit fix
-            
+
+            if np.any(np.abs(dDWR_dh) > max_ddwr_dh):   #guarded retrieval: if the absolute value of the derivative exceeds the maximum allowed value, skip this window. This is a physical ceiling on the vertical gradient of DWR, which helps to avoid unphysical results due to noise or other issues.
+                continue
             # ── Per-gate Δκ, Δα for THIS window (no averaging!) ──────────────
             dk_win = dkappa[t, i_start:i_end]
             da_win = dalpha[t, i_start:i_end]
