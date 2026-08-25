@@ -144,7 +144,7 @@ def retrieve_lwc_zhu(
     # ── Output accumulators ──────────────────────────────────────────────────
     lwc_sum = np.zeros((n_t, n_r), dtype=float)
     lwc_cnt = np.zeros((n_t, n_r), dtype=int)
-    
+    n_used = np.zeros(n_t, dtype=int)
     
     derivative_sum = np.zeros((n_t, n_r), dtype=float)
     derivative_count = np.zeros((n_t, n_r), dtype=int)
@@ -180,7 +180,7 @@ def retrieve_lwc_zhu(
         N = min(N_default, thickness)                      # Searches Minimum between the default window size and the thickness of the cloud. If the cloud is thinner than the default window size, it will use the thickness as the window size.
         if N < 3:                       # need ≥ 3 points for a quadratic fit
             continue
-        
+        n_used[t] = N
         # ── Slide window from cloud base to cloud top ────────────────────────
         for i_start in range(i_base, i_top - N + 2):                 # Python excludes the last index, so we need to add 2 to include the last window that starts at i_top - N + 1
             i_end = i_start + N         # exclusive
@@ -288,7 +288,10 @@ def retrieve_lwc_zhu(
         n_windows, dims=dwr.dims, coords=dwr.coords, name="n_windows",
         attrs={"long_name": "Number of sliding windows contributing to each gate (M)"},
     )
+    # with the other DataArrays
+    n_used_da = xr.DataArray(n_used, dims=["Time"], coords={"Time": dwr["Time"]},
+                         name="N_used",
+                         attrs={"long_name": "window size actually used, gates"})
 
 
-
-    return lwc_da, derivative_da, m_eff_da, n_windows_da
+    return lwc_da, derivative_da, m_eff_da, n_windows_da, n_used_da
