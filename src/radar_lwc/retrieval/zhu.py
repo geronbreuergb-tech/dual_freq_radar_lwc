@@ -223,7 +223,7 @@ def retrieve_lwc_zhu(
             lwc_cnt[t, idx[valid]] += 1
 
 
-            derivative_sum[t, idx[valid]] += dDWR_dh
+            derivative_sum[t, idx[valid]] += dDWR_dh[valid]
             derivative_count[t, idx[valid]] += 1
 
             # NEW: store each valid per-gate estimate under its gate key.
