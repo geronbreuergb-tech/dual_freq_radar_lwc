@@ -98,6 +98,8 @@ def retrieve_lwc_zhu(
     max_ddwr_dh=50.0,      # dB/km — physical ceiling on |dDWR/dh|
     max_window_std=3.0,    # dB    — reject noisy windows
     edge_pad=1,            # skip edge gates near cloud base/top
+    edge_pad_bottom=None,
+    edge_pad_top=None,
 ) -> xr.DataArray:
     """
     Retrieve LWC(time, range) via sliding-window polynomial DWR gradient.
@@ -128,6 +130,8 @@ def retrieve_lwc_zhu(
     xr.DataArray  LWC(time, range) [g/m³]. NaN outside cloud.
     """
     # ── Pull NumPy views for speed ───────────────────────────────────────────
+    pad_b = edge_pad if edge_pad_bottom is None else edge_pad_bottom
+    pad_t = edge_pad if edge_pad_top    is None else edge_pad_top
     r_m     = dwr["range"].values.astype(float)         # heights [m]
     n_t, n_r = dwr.shape
     
@@ -170,8 +174,8 @@ def retrieve_lwc_zhu(
         i_base = cloud_idx.min()        # cloud-base gate index
         i_top  = cloud_idx.max()        # cloud-top gate index
 
-        i_base += edge_pad
-        i_top  -= edge_pad #remove edges 
+        i_base += pad_b
+        i_top  -= pad_t #remove edges 
 
 
         thickness = i_top - i_base + 1
@@ -260,6 +264,8 @@ def retrieve_lwc_zhu(
         "method": "Sliding-window quadratic DWR gradient",
         "window_size_default_gates": N_default,
         "min_cloud_gates": min_cloud_gates,
+        "edge_pad_bottom": pad_b,
+        "edge_pad_top": pad_t,
         },
     )
 

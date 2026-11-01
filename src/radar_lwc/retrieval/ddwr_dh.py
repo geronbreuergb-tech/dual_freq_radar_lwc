@@ -61,7 +61,10 @@ def compute_ddwr_dh(
             # ── Fit quadratic & compute analytical derivative ────────────────
             # DWR(h) ≈ a·h² + b·h + c
             # dDWR/dh = 2ah + b
+            if h_win.size < 3 or not np.isfinite(dwr_win).all():
+                continue
 
+        
             a, b, _ = np.polyfit(h_win, dwr_win, 2)
 
             dDWR_dh_per_m = 2.0 * a * h_win + b
